@@ -4,11 +4,13 @@
 // 'caption' — Instagram matni.
 
 $base = 'Animate the child in this photo as a realistic, natural, wholesome short vertical video. '
-      . 'Keep his face, hair and clothes exactly as in the photo. Smooth natural motion, warm soft lighting. ';
+      . 'Keep his face, hair and clothes exactly as in the photo. Smooth natural motion, warm soft lighting. '
+      . 'He speaks slowly and clearly in Uzbek, pronouncing every syllable. '
+      . 'His name is pronounced in three clear syllables: Mus-ta-fo (moos-TAH-foh) — never shorten it to "Musfo". ';
 
 return [
     [
-        'prompt'  => $base . 'He smiles, waves at the camera and says cheerfully in Uzbek, in a natural 6-year-old boy voice: "Assalomu alaykum! Men Mustafo! Sahifamga xush kelibsiz!"',
+        'prompt'  => $base . 'He smiles, waves at the camera and says cheerfully in Uzbek, in a natural 6-year-old boy voice: "Assalomu alaykum! Men... Mus-ta-fo! Sahifamga xush kelibsiz!"',
         'caption' => "Assalomu alaykum! Men Mustafo 👋\nSahifamga xush kelibsiz! Obuna bo'ling, har hafta yangi video 😊\n\n#mustafo #bolalar #uzbekistan #reels #trend",
     ],
     [
