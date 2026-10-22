@@ -134,6 +134,14 @@ function invent_idea(array $recent): array {
          . "Vary everything: location/atmosphere (cities, nature, seasons, Uzbek culture, fantasy, sports, holidays, etc.), "
          . "activity (dance trend, funny reaction, mini story, lifehack, compliment to parents, motivation, joke...), "
          . "and camera work (slow dolly-in, orbit, tracking shot, low angle, close-up to wide, etc.). "
+         . "WHAT WORKS on this page (learned from real results): the best video (28x more views) was the boy in a golden autumn park "
+         . "throwing falling leaves with arms wide open — strong motion and particles from the very first frame, seasonal, warm and emotional. "
+         . "The weakest video started with the boy just standing still and looking at the camera. So ALWAYS: "
+         . "(1) the first second must already have strong, eye-catching motion — leaves/snow/petals/bubbles/confetti/water splashes flying, "
+         . "running, jumping, spinning, a surprise reveal; never start with him standing still or posing; "
+         . "(2) prefer themes tied to the current season, weather and upcoming holidays in Uzbekistan (use today's date), "
+         . "and emotional, cozy, cinematic moments that parents want to share; "
+         . "(3) golden-hour or magical lighting, rich colors, depth and atmosphere. "
          . "The boy says ONE short, natural, everyday Uzbek (Latin script) sentence, max 10 words, simple words a child uses, correct grammar. "
          . "Prefer NOT to use his own name in the spoken line. Never anything unsafe, romantic, scary, or inappropriate for children. "
          . "Return ONLY valid JSON with keys: "
@@ -181,9 +189,27 @@ function ext_prompt(string $cont, string $line2, string $music): string {
          . "Professional modern cinematic look, smooth realistic motion.";
 }
 
+/** Instagram matnidagi heshteglarni tozalaydi: xatolarni tuzatadi, takrorlarni olib tashlaydi, #reels qo'shadi. */
+function fix_caption(string $caption): string {
+    $fix = ['rekels' => 'reels', 'reals' => 'reels', 'reel' => 'reels', 'rells' => 'reels', 'relss' => 'reels',
+            'uzbekiston' => 'uzbekistan', 'ozbekiston' => 'uzbekistan', 'bolalr' => 'bolalar'];
+    $seen = [];
+    $text = preg_replace_callback('/#([\p{L}\p{N}_\']+)/u', function ($m) use ($fix, &$seen) {
+        $t = mb_strtolower(str_replace("'", '', $m[1]));
+        $t = $fix[$t] ?? $t;
+        if (isset($seen[$t]) || mb_strlen($t) < 2) return '';
+        $seen[$t] = true;
+        return '#' . $t;
+    }, $caption);
+    if (!isset($seen['reels'])) $text = rtrim($text) . ' #reels';
+    if (!isset($seen['bolalar'])) $text = rtrim($text) . ' #bolalar';
+    return trim(preg_replace('/[ \t]{2,}/', ' ', $text));
+}
+
 /** Video uchun yakuniy ko'rsatma (talaffuz va sifat qoidalari bilan). */
 function video_prompt(string $action, string $line, string $music = 'soft, cheerful instrumental music matching the mood'): string {
     return "Professional modern cinematic vertical video, smooth realistic motion, shallow depth of field, high detail. "
+         . "The video must open with strong, eye-catching motion from the very first frame (no static start). "
          . "Keep the boy's face, hair, outfit and identity exactly as in the image. $action "
          . "He says in Uzbek, in a natural cheerful 6-year-old boy voice, slowly and clearly, pronouncing every sound and syllable correctly, "
          . "without skipping letters: \"$line\". Lip movements match the speech. "
@@ -308,7 +334,7 @@ try {
             $outfit  = $gen['outfit'];
             $prompt  = video_prompt($gen['action'], $gen['line'], $gen['music']);
             $extPrompt = ext_prompt($gen['continuation'] ?? '', $gen['line2'] ?? '', $gen['music']);
-            $caption = $gen['caption'];
+            $caption = fix_caption($gen['caption']);
             $summary = $gen['summary'] . ' | kiyim: ' . $gen['outfit'] . ' | musiqa: ' . $gen['music'] . ' | "' . $gen['line'] . '"';
         } catch (Throwable $e) {
             logmsg("G'oya yaratilmadi, tayyor ro'yxatdan olinadi: " . $e->getMessage());
