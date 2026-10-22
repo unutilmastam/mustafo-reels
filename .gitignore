@@ -1,3 +1,6 @@
 __pycache__/
 *.jpg
 *.png
+grok-bot/config.php
+grok-bot/state.json
+grok-bot/bot.log
