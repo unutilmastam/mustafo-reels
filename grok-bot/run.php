@@ -14,7 +14,8 @@
 
 declare(strict_types=1);
 date_default_timezone_set('Asia/Tashkent');
-set_time_limit(120);
+set_time_limit(600);
+ignore_user_abort(true);
 header('Content-Type: text/plain; charset=utf-8');
 
 $DIR = __DIR__;
@@ -56,13 +57,26 @@ function logmsg(string $m): void {
     file_put_contents("$DIR/bot.log", $line, FILE_APPEND);
 }
 
-function http_json(string $method, string $url, array $headers, ?array $body = null): array {
+function http_json(string $method, string $url, array $headers, ?array $body = null, int $timeout = 180, int $tries = 3): array {
+    for ($i = 1; ; $i++) {
+        try {
+            return http_json_once($method, $url, $headers, $body, $timeout);
+        } catch (RuntimeException $e) {
+            $retry = str_starts_with($e->getMessage(), 'Tarmoq xatosi') || preg_match('/^HTTP (429|5\d\d|400: .*download)/', $e->getMessage());
+            if (!$retry || $i >= $tries) throw $e;
+            sleep(5 * $i);
+        }
+    }
+}
+
+function http_json_once(string $method, string $url, array $headers, ?array $body, int $timeout): array {
     $ch = curl_init($url);
     curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_CUSTOMREQUEST  => $method,
         CURLOPT_HTTPHEADER     => array_merge(['Content-Type: application/json'], $headers),
-        CURLOPT_TIMEOUT        => 60,
+        CURLOPT_TIMEOUT        => $timeout,
+        CURLOPT_CONNECTTIMEOUT => 20,
     ]);
     if ($body !== null) curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($body, JSON_UNESCAPED_UNICODE));
     $raw  = curl_exec($ch);
@@ -99,13 +113,13 @@ function prepare_image(string $src, string $dst): void {
         default        => throw new RuntimeException("Qo'llanmaydigan rasm turi: $src"),
     };
     [$w, $h] = [$info[0], $info[1]];
-    $TW = 1080; $TH = 1920;
+    $TW = 720; $TH = 1280;
     $scale = min($TW / $w, $TH / $h) * 0.92;      // to'liq sig'adi, chetida joy qoladi
     $nw = (int)round($w * $scale); $nh = (int)round($h * $scale);
     $out = imagecreatetruecolor($TW, $TH);
     imagefill($out, 0, 0, imagecolorallocate($out, 205, 200, 195));
     imagecopyresampled($out, $img, (int)(($TW - $nw) / 2), $TH - $nh - 40, 0, 0, $nw, $nh, $w, $h);
-    imagejpeg($out, $dst, 92);
+    imagejpeg($out, $dst, 85);
 }
 
 /**
@@ -178,6 +192,15 @@ function video_prompt(string $action, string $line, string $music = 'soft, cheer
          . "mixed quietly under his voice so every word stays clear, plus subtle natural ambient sounds of the place.";
 }
 
+/** Hostingdagi faylni base64 data URI ga aylantiradi (Grok uni yuklab olishga hojat qolmaydi). */
+function to_data_uri(string $url): string {
+    global $CFG, $DIR;
+    $rel = substr($url, strlen($CFG['BASE_URL']) + 1);
+    $path = "$DIR/$rel";
+    if (!str_starts_with($url, $CFG['BASE_URL'] . '/') || !is_file($path)) return $url;
+    return 'data:image/jpeg;base64,' . base64_encode((string)file_get_contents($path));
+}
+
 /** Grok bilan bolani yangi fonga/atmosferaga joylaydi (9:16). Natija faylini saqlaydi. */
 function make_scene(string $srcUrl, string $scene, string $dst, string $outfit = ''): void {
     global $CFG;
@@ -194,7 +217,7 @@ function make_scene(string $srcUrl, string $scene, string $dst, string $outfit =
         [
             'model'        => $CFG['IMAGE_MODEL'] ?? 'grok-imagine-image',
             'prompt'       => $prompt,
-            'image'        => ['url' => $srcUrl, 'type' => 'image_url'],
+            'image'        => ['url' => to_data_uri($srcUrl), 'type' => 'image_url'],
             'aspect_ratio' => '9:16',
         ]);
     $item = $res['data'][0] ?? $res;
@@ -449,6 +472,15 @@ try {
     echo "Noma'lum rejim: $mode (new | check | status)\n";
 } catch (Throwable $e) {
     logmsg('XATO: ' . $e->getMessage());
+    if ($mode === 'new' && empty($state['pending']) && ($state['last_auto'] ?? '') === date('Y-m-d')) {
+        $state['auto_fail'] = (($state['auto_fail_day'] ?? '') === date('Y-m-d')) ? ($state['auto_fail'] ?? 0) + 1 : 1;
+        $state['auto_fail_day'] = date('Y-m-d');
+        if ($state['auto_fail'] < 3) {
+            unset($state['last_auto']);   // 5 daqiqadan keyin qayta urinadi
+            logmsg("Qayta urinish rejalashtirildi ({$state['auto_fail']}/3).");
+        }
+        save_state($state);
+    }
     notify('❌ Mustafo bot xatosi: ' . $e->getMessage());
     http_response_code(500);
 }
