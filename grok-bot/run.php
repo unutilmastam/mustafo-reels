@@ -152,10 +152,10 @@ function invent_idea(array $recent): array {
     return $j;
 }
 
-/** Uzaytirish soniyalari (0 = o'chiq). Standart: 10 → jami 25 soniya. */
+/** Uzaytirish soniyalari (0 = o'chiq). Standart: 0 (o'chiq); 10 → jami 25 soniya. */
 function extend_seconds(): int {
     global $CFG;
-    return max(0, min(10, (int)($CFG['EXTEND_SECONDS'] ?? 10)));
+    return max(0, min(10, (int)($CFG['EXTEND_SECONDS'] ?? 0)));
 }
 
 /** Videoning 2-qismi uchun ko'rsatma. */
@@ -225,11 +225,26 @@ function list_photos(): array {
 // ================= REJIMLAR =================
 
 try {
+    // Kechiktirilgan buyurtma: ?mode=later&min=60 -> 60 daqiqadan keyin cron (check) o'zi 'new' qiladi
+    if ($mode === 'later') {
+        $min = max(1, min(1440, (int)($isCli ? ($argv[2] ?? 60) : ($_GET['min'] ?? 60))));
+        $state['run_at'] = time() + $min * 60;
+        save_state($state);
+        logmsg("Yangi video $min daqiqadan keyin yasaladi: " . date('H:i', $state['run_at']) . " (Toshkent vaqti)");
+        exit;
+    }
+    if ($mode === 'check' && empty($state['pending']) && !empty($state['run_at']) && time() >= $state['run_at']) {
+        unset($state['run_at']);
+        save_state($state);
+        $mode = 'new';
+    }
+
     if ($mode === 'status') {
         echo "Rasmlar: " . count(list_photos()) . "\n";
         echo "Rejim: har safar yangi g'oya (AI)\n";
         echo "Oxirgi g'oyalar:\n";
         foreach (array_slice($state['recent'], -5) as $r) echo " * $r\n";
+        if (!empty($state['run_at'])) echo "Rejalashtirilgan: " . date('Y-m-d H:i', $state['run_at']) . " (Toshkent)\n";
         echo "Kutilayotgan: " . json_encode($state['pending'], JSON_UNESCAPED_UNICODE) . "\n";
         echo "Oxirgi natijalar:\n";
         foreach (array_slice($state['history'], -5) as $h) echo " - " . json_encode($h, JSON_UNESCAPED_UNICODE) . "\n";

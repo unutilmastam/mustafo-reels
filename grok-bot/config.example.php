@@ -21,7 +21,7 @@ return [
     // Video sozlamalari
     'DURATION'       => 10,       // soniya (1-15)
     'RESOLUTION'     => '720p',   // '720p' yoki '480p'
-    'EXTEND_SECONDS' => 10,       // uzaytirish: 10 = jami 25 s, 0 = o'chiq (15 s gacha)
+    'EXTEND_SECONDS' => 0,        // uzaytirish: 10 = jami 25 s, 0 = o'chiq (15 s gacha)
 
     // true = darhol joylaydi, false = Buffer navbatiga qo'shadi
     'POST_NOW'       => true,
