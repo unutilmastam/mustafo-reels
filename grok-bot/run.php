@@ -233,8 +233,23 @@ try {
         logmsg("Yangi video $min daqiqadan keyin yasaladi: " . date('H:i', $state['run_at']) . " (Toshkent vaqti)");
         exit;
     }
+    // Avtomatik jadval (Toshkent vaqti): standart — Sesh/Pay/Shan, 19:50 da boshlanadi -> ~20:00 da chiqadi
+    if ($mode === 'check' && empty($state['pending'])) {
+        $days  = $CFG['POST_DAYS'] ?? [2, 4, 6];          // 1=Dush ... 7=Yaksh
+        $start = $CFG['POST_TIME'] ?? '19:50';
+        $today = date('Y-m-d');
+        $now   = date('H:i');
+        if (in_array((int)date('N'), $days, true) && $now >= $start && $now < '23:00'
+            && ($state['last_auto'] ?? '') !== $today) {
+            $state['last_auto'] = $today;
+            save_state($state);
+            logmsg("Jadval bo'yicha yangi video boshlandi ($today $now).");
+            $mode = 'new';
+        }
+    }
     if ($mode === 'check' && empty($state['pending']) && !empty($state['run_at']) && time() >= $state['run_at']) {
         unset($state['run_at']);
+        $state['last_auto'] = date('Y-m-d');   // bugungi post shu bo'ladi, ikkinchisi chiqmaydi
         save_state($state);
         $mode = 'new';
     }
@@ -244,6 +259,8 @@ try {
         echo "Rejim: har safar yangi g'oya (AI)\n";
         echo "Oxirgi g'oyalar:\n";
         foreach (array_slice($state['recent'], -5) as $r) echo " * $r\n";
+        $dn = ['', 'Dush', 'Sesh', 'Chor', 'Pay', 'Jum', 'Shan', 'Yaksh'];
+        echo "Jadval: " . implode(', ', array_map(fn($d) => $dn[$d], $CFG['POST_DAYS'] ?? [2, 4, 6])) . " soat " . ($CFG['POST_TIME'] ?? '19:50') . " (Toshkent), joylanishi ~10 daqiqada\n";
         if (!empty($state['run_at'])) echo "Rejalashtirilgan: " . date('Y-m-d H:i', $state['run_at']) . " (Toshkent)\n";
         echo "Kutilayotgan: " . json_encode($state['pending'], JSON_UNESCAPED_UNICODE) . "\n";
         echo "Oxirgi natijalar:\n";
