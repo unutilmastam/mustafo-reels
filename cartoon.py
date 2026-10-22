@@ -394,6 +394,27 @@ def make_audio(path, dur, bpm, seed=1):
         w.writeframes(bytes(out))
 
 
+
+# ---------------- OVOZ (TTS) ----------------
+def tts(text, path):
+    """O'zbekcha bola ovozi: espeak-ng + baland ton."""
+    raw = path + ".raw.wav"
+    subprocess.run(["espeak-ng", "-v", "uz+f4", "-p", "88", "-s", "138", "-g", "4", "-w", raw, text], check=True)
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", raw, "-af",
+                    "rubberband=pitch=1.18:formant=preserved,highpass=f=140,lowpass=f=7500,volume=1.6",
+                    "-ar", "44100", "-ac", "1", path], check=True)
+    with wave.open(path) as w:
+        n, sr = w.getnframes(), w.getframerate()
+        data = struct.unpack("<%dh" % n, w.readframes(n))
+    hop = sr // FPS
+    env = []
+    for i in range(0, n, hop):
+        chunk = data[i:i + hop]
+        env.append((sum(x * x for x in chunk) / max(1, len(chunk))) ** 0.5)
+    mx = max(env) or 1
+    env = [min(1.0, e / mx * 1.4) for e in env]
+    return env, n / sr
+
 # ---------------- EPIZODLAR ----------------
 def talk(t, start, end):
     if start <= t < end:
@@ -464,7 +485,10 @@ def episode_salom(t, bpm):
 
 EPISODES = {
     "salom": dict(fn=episode_salom, dur=13, bpm=112, theme=((1.0, 0.93, 0.84), (0.98, 0.78, 0.66)),
-                  title="MUSTAFO SHOU"),
+                  title="MUSTAFO SHOU",
+                  lines=[(1.45, "Assalomu alaykum! Men Mustafo!", "Assalomu alaykum! Men Mustafo!"),
+                         (4.3, "Kayfiyat 100%! Qani, birga raqsga!", "Kayfiyat yuz foiz! Qani, birga raqsga tushamiz!"),
+                         (9.1, "Obuna bo'ling, har kuni yangi sarguzasht!", "Obuna bo'ling! Har kuni yangi sarguzasht!")]),
 }
 
 
@@ -474,6 +498,23 @@ def render(out, name="salom"):
     tmp = tempfile.mkdtemp()
     wav = os.path.join(tmp, "a.wav")
     make_audio(wav, dur, bpm, seed=len(name))
+    voices = []
+    for i, (st, _, spoken) in enumerate(ep.get("lines", [])):
+        vp = os.path.join(tmp, f"v{i}.wav")
+        env, vd = tts(spoken, vp)
+        voices.append((st, env, vp))
+    if voices:
+        mixed = os.path.join(tmp, "mix.wav")
+        args = ["ffmpeg", "-y", "-loglevel", "error", "-i", wav]
+        fl = "[0]volume=0.45[m];"
+        for i, (st, _, vp) in enumerate(voices):
+            args += ["-i", vp]
+            ms = int(st * 1000)
+            fl += f"[{i+1}]adelay={ms}|{ms}[d{i}];"
+        fl += "[m]" + "".join(f"[d{i}]" for i in range(len(voices))) + \
+              f"amix=inputs={len(voices)+1}:duration=first:normalize=0[o]"
+        subprocess.run(args + ["-filter_complex", fl, "-map", "[o]", mixed], check=True)
+        wav = mixed
     proc = subprocess.Popen(
         ["ffmpeg", "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "bgra", "-s", f"{W}x{H}",
          "-r", str(FPS), "-i", "-", "-i", wav, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "medium",
@@ -486,6 +527,10 @@ def render(out, name="salom"):
         c = cairo.Context(surf)
         draw_bg(c, t, ep["theme"])
         x, p, texts = ep["fn"](t, bpm)
+        for (st, env, _) in voices:
+            k = int((t - st) * FPS)
+            if 0 <= k < len(env):
+                p["mouth"] = env[k] if env[k] > 0.12 else 0.0
         # ritmda yulduzchalar
         for i in range(6):
             ang = i * 1.05 + t * 0.6
