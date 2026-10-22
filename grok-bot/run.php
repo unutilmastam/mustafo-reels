@@ -23,6 +23,7 @@ if (!file_exists("$DIR/config.php")) {
 }
 $CFG   = require "$DIR/config.php";
 $IDEAS = require "$DIR/ideas.php";
+$SCENES = require "$DIR/scenes.php";
 
 // --- ruxsat tekshiruvi ---
 $isCli = PHP_SAPI === 'cli';
@@ -40,7 +41,7 @@ $STATE_FILE = "$DIR/state.json";
 $state = file_exists($STATE_FILE)
     ? (json_decode((string)file_get_contents($STATE_FILE), true) ?: [])
     : [];
-$state += ['idea' => 0, 'photo' => 0, 'pending' => null, 'history' => []];
+$state += ['idea' => 0, 'photo' => 0, 'scene' => 0, 'pending' => null, 'history' => []];
 
 function save_state(array $s): void {
     global $STATE_FILE;
@@ -83,7 +84,11 @@ function notify(string $text): void {
     } catch (Throwable $e) { /* jim */ }
 }
 
-/** Rasmni 9:16 (720x1280) ga keltiradi: baland rasmda tepasini (yuzini) saqlaydi. */
+/**
+ * Rasmni KESMASDAN 9:16 (1080x1920) kanvasga joylaydi.
+ * Bola to'liq ko'rinadi, atrofi neytral rang bilan to'ldiriladi — keyin Grok
+ * u yerga yangi fon chizadi.
+ */
 function prepare_image(string $src, string $dst): void {
     $info = getimagesize($src);
     if (!$info) throw new RuntimeException("Rasm o'qilmadi: $src");
@@ -94,16 +99,48 @@ function prepare_image(string $src, string $dst): void {
         default        => throw new RuntimeException("Qo'llanmaydigan rasm turi: $src"),
     };
     [$w, $h] = [$info[0], $info[1]];
-    $TW = 720; $TH = 1280;
-    $scale = max($TW / $w, $TH / $h);
-    $nw = (int)ceil($w * $scale); $nh = (int)ceil($h * $scale);
-    $sx = (int)(($nw - $TW) / 2);
-    $sy = ($nh > $TH) ? (int)(($nh - $TH) * 0.15) : 0; // baland rasmda tepaga yaqin kesadi
+    $TW = 1080; $TH = 1920;
+    $scale = min($TW / $w, $TH / $h) * 0.92;      // to'liq sig'adi, chetida joy qoladi
+    $nw = (int)round($w * $scale); $nh = (int)round($h * $scale);
     $out = imagecreatetruecolor($TW, $TH);
-    $tmp = imagecreatetruecolor($nw, $nh);
-    imagecopyresampled($tmp, $img, 0, 0, 0, 0, $nw, $nh, $w, $h);
-    imagecopy($out, $tmp, 0, 0, $sx, $sy, $TW, $TH);
+    imagefill($out, 0, 0, imagecolorallocate($out, 205, 200, 195));
+    imagecopyresampled($out, $img, (int)(($TW - $nw) / 2), $TH - $nh - 40, 0, 0, $nw, $nh, $w, $h);
     imagejpeg($out, $dst, 92);
+}
+
+/** Grok bilan bolani yangi fonga/atmosferaga joylaydi (9:16). Natija faylini saqlaydi. */
+function make_scene(string $srcUrl, string $scene, string $dst): void {
+    global $CFG;
+    $prompt = "Place this exact same little boy into a new scene: $scene. "
+        . "Keep his face, facial features, hairstyle, skin tone and identity exactly the same; "
+        . "outfit may suit the scene but must look natural and age-appropriate. "
+        . "Vertical 9:16 full-frame composition, the boy in the center, visible from head to at least the knees, "
+        . "photorealistic, natural cinematic lighting, sharp focus, wholesome family-friendly mood. "
+        . "The new background must fill the entire frame, no borders, no blank areas, no text.";
+    $res = http_json('POST', 'https://api.x.ai/v1/images/edits',
+        ["Authorization: Bearer {$CFG['XAI_API_KEY']}"],
+        [
+            'model'        => $CFG['IMAGE_MODEL'] ?? 'grok-imagine-image',
+            'prompt'       => $prompt,
+            'image'        => ['url' => $srcUrl, 'type' => 'image_url'],
+            'aspect_ratio' => '9:16',
+        ]);
+    $item = $res['data'][0] ?? $res;
+    if (!empty($item['b64_json'])) {
+        $bin = base64_decode($item['b64_json']);
+    } elseif (!empty($item['url'])) {
+        $ch = curl_init($item['url']);
+        curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_FOLLOWLOCATION => true, CURLOPT_TIMEOUT => 60]);
+        $bin = curl_exec($ch);
+        curl_close($ch);
+    } else {
+        throw new RuntimeException('Grok rasm qaytarmadi: ' . substr(json_encode($res, JSON_UNESCAPED_UNICODE), 0, 400));
+    }
+    if (!$bin || strlen($bin) < 5000) throw new RuntimeException('Yangi fonli rasm yuklab olinmadi.');
+    // Har qanday formatni JPEG ga o'tkazamiz
+    $im = @imagecreatefromstring($bin);
+    if (!$im) throw new RuntimeException("Yangi fonli rasm o'qilmadi.");
+    imagejpeg($im, $dst, 92);
 }
 
 function list_photos(): array {
@@ -119,6 +156,7 @@ try {
     if ($mode === 'status') {
         echo "Rasmlar: " . count(list_photos()) . "\n";
         echo "Keyingi g'oya: #" . ($state['idea'] % count($IDEAS) + 1) . " / " . count($IDEAS) . "\n";
+        echo "Keyingi fon: " . $SCENES[$state['scene'] % count($SCENES)] . "\n";
         echo "Kutilayotgan: " . json_encode($state['pending'], JSON_UNESCAPED_UNICODE) . "\n";
         echo "Oxirgi natijalar:\n";
         foreach (array_slice($state['history'], -5) as $h) echo " - " . json_encode($h, JSON_UNESCAPED_UNICODE) . "\n";
@@ -136,8 +174,19 @@ try {
         $photo = $photos[$state['photo'] % count($photos)];
         $idea  = $IDEAS[$state['idea'] % count($IDEAS)];
 
-        $prepName = bin2hex(random_bytes(8)) . '.jpg';   // taxmin qilib bo'lmaydigan nom
-        prepare_image($photo, "$DIR/prepared/$prepName");
+        $scene = $SCENES[$state['scene'] % count($SCENES)];
+
+        // 1) Rasmni kesmasdan 9:16 kanvasga joylash
+        $padName = bin2hex(random_bytes(8)) . '.jpg';   // taxmin qilib bo'lmaydigan nom
+        prepare_image($photo, "$DIR/prepared/$padName");
+
+        // 2) Grok: bolani yangi fon/atmosferaga joylash
+        $prepName = bin2hex(random_bytes(8)) . '.jpg';
+        try {
+            make_scene("{$CFG['BASE_URL']}/prepared/$padName", $scene, "$DIR/prepared/$prepName");
+        } finally {
+            @unlink("$DIR/prepared/$padName");
+        }
         $imgUrl = "{$CFG['BASE_URL']}/prepared/$prepName";
 
         $res = http_json('POST', 'https://api.x.ai/v1/videos/generations',
@@ -157,10 +206,12 @@ try {
             'idea'       => $state['idea'] % count($IDEAS),
             'photo'      => basename($photo),
             'prepared'   => $prepName,
+            'scene'      => $state['scene'] % count($SCENES),
             'created'    => date('c'),
         ];
         $state['idea']++;
         $state['photo']++;
+        $state['scene']++;
         save_state($state);
         logmsg("Video buyurtma qilindi: {$res['request_id']} (g'oya #" . ($state['pending']['idea'] + 1) . ")");
         exit;

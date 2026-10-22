@@ -1,4 +1,4 @@
 Options -Indexes
-<FilesMatch "^(config\.php|config\.example\.php|ideas\.php|state\.json|bot\.log)$">
+<FilesMatch "^(config\.php|config\.example\.php|ideas\.php|scenes\.php|state\.json|bot\.log)$">
   Require all denied
 </FilesMatch>
