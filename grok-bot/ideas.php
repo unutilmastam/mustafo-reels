@@ -6,7 +6,8 @@
 $base = 'Animate the child in this photo as a realistic, natural, wholesome short vertical video. '
       . 'Keep his face, hair, outfit and identity exactly as in the image. Smooth natural motion, warm soft lighting. '
       . 'He speaks slowly and clearly in Uzbek, pronouncing every syllable. '
-      . 'His name is pronounced in three clear syllables: Mus-ta-fo (moos-TAH-foh) — never shorten it to "Musfo". ';
+      . 'His name is pronounced in three clear syllables: Mus-ta-fo (moos-TAH-foh) — never shorten it to "Musfo". '
+      . 'Background music plays throughout: soft, cheerful instrumental music matching the mood, no lyrics, quietly mixed under his voice so his words stay clear. ';
 
 return [
     [

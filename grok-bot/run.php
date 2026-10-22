@@ -127,6 +127,7 @@ function invent_idea(array $recent): array {
          . "\"outfit\" (English, a NEW stylish age-appropriate outfit for him that fits the scene and season — different every time: colors, style, accessories like cap, glasses, scarf; modest and child-appropriate), "
          . "\"action\" (English, what he does + camera movement, for a video), "
          . "\"line\" (the Uzbek sentence he says), "
+         . "\"music\" (English, background music style that matches the mood and place, e.g. 'gentle acoustic guitar, warm autumn mood' or 'upbeat modern kids pop beat'; instrumental only, no lyrics), "
          . "\"caption\" (Uzbek Instagram caption, 1-3 short lines with emojis, then 4-6 relevant hashtags), "
          . "\"summary\" (5-8 English words describing the concept).";
     $res = http_json('POST', 'https://api.x.ai/v1/chat/completions',
@@ -143,19 +144,21 @@ function invent_idea(array $recent): array {
     $txt = $res['choices'][0]['message']['content'] ?? '';
     $txt = trim(preg_replace('/^```(?:json)?|```$/m', '', $txt));
     $j = json_decode($txt, true);
-    foreach (['scene', 'outfit', 'action', 'line', 'caption', 'summary'] as $k) {
+    foreach (['scene', 'outfit', 'action', 'line', 'music', 'caption', 'summary'] as $k) {
         if (empty($j[$k]) || !is_string($j[$k])) throw new RuntimeException("G'oya noto'g'ri formatda: " . substr($txt, 0, 300));
     }
     return $j;
 }
 
 /** Video uchun yakuniy ko'rsatma (talaffuz va sifat qoidalari bilan). */
-function video_prompt(string $action, string $line): string {
+function video_prompt(string $action, string $line, string $music = 'soft, cheerful instrumental music matching the mood'): string {
     return "Professional modern cinematic vertical video, smooth realistic motion, shallow depth of field, high detail. "
          . "Keep the boy's face, hair, outfit and identity exactly as in the image. $action "
          . "He says in Uzbek, in a natural cheerful 6-year-old boy voice, slowly and clearly, pronouncing every sound and syllable correctly, "
          . "without skipping letters: \"$line\". Lip movements match the speech. "
-         . "If the name Mustafo is said, pronounce it in three syllables: Mus-ta-fo.";
+         . "If the name Mustafo is said, pronounce it in three syllables: Mus-ta-fo. "
+         . "Audio: background music playing throughout the whole video — $music — instrumental, no lyrics, "
+         . "mixed quietly under his voice so every word stays clear, plus subtle natural ambient sounds of the place.";
 }
 
 /** Grok bilan bolani yangi fonga/atmosferaga joylaydi (9:16). Natija faylini saqlaydi. */
@@ -231,9 +234,9 @@ try {
             $gen = invent_idea(array_slice($state['recent'], -15));
             $scene   = $gen['scene'];
             $outfit  = $gen['outfit'];
-            $prompt  = video_prompt($gen['action'], $gen['line']);
+            $prompt  = video_prompt($gen['action'], $gen['line'], $gen['music']);
             $caption = $gen['caption'];
-            $summary = $gen['summary'] . ' | kiyim: ' . $gen['outfit'] . ' | "' . $gen['line'] . '"';
+            $summary = $gen['summary'] . ' | kiyim: ' . $gen['outfit'] . ' | musiqa: ' . $gen['music'] . ' | "' . $gen['line'] . '"';
         } catch (Throwable $e) {
             logmsg("G'oya yaratilmadi, tayyor ro'yxatdan olinadi: " . $e->getMessage());
             $idea    = $IDEAS[$state['idea'] % count($IDEAS)];
