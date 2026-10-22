@@ -127,6 +127,8 @@ function invent_idea(array $recent): array {
          . "\"outfit\" (English, a NEW stylish age-appropriate outfit for him that fits the scene and season — different every time: colors, style, accessories like cap, glasses, scarf; modest and child-appropriate), "
          . "\"action\" (English, what he does + camera movement, for a video), "
          . "\"line\" (the Uzbek sentence he says), "
+         . "\"continuation\" (English, what happens next in a second part of the same video: a new action and a different camera angle, same place, same outfit), "
+         . "\"line2\" (a second short Uzbek sentence he says in that second part, max 8 words), "
          . "\"music\" (English, background music style that matches the mood and place, e.g. 'gentle acoustic guitar, warm autumn mood' or 'upbeat modern kids pop beat'; instrumental only, no lyrics), "
          . "\"caption\" (Uzbek Instagram caption, 1-3 short lines with emojis, then 4-6 relevant hashtags), "
          . "\"summary\" (5-8 English words describing the concept).";
@@ -148,6 +150,21 @@ function invent_idea(array $recent): array {
         if (empty($j[$k]) || !is_string($j[$k])) throw new RuntimeException("G'oya noto'g'ri formatda: " . substr($txt, 0, 300));
     }
     return $j;
+}
+
+/** Uzaytirish soniyalari (0 = o'chiq). Standart: 10 → jami 25 soniya. */
+function extend_seconds(): int {
+    global $CFG;
+    return max(0, min(10, (int)($CFG['EXTEND_SECONDS'] ?? 10)));
+}
+
+/** Videoning 2-qismi uchun ko'rsatma. */
+function ext_prompt(string $cont, string $line2, string $music): string {
+    $cont = $cont !== '' ? $cont : 'He continues naturally with a new playful action; the camera smoothly changes angle.';
+    $say  = $line2 !== '' ? " He then says in Uzbek, slowly and clearly, pronouncing every sound correctly: \"$line2\"." : '';
+    return "Continue this exact video seamlessly: same boy, same face, same outfit, same place and lighting. $cont$say "
+         . "Keep the same background music ($music) continuing without a break, quietly under his voice. "
+         . "Professional modern cinematic look, smooth realistic motion.";
 }
 
 /** Video uchun yakuniy ko'rsatma (talaffuz va sifat qoidalari bilan). */
@@ -235,6 +252,7 @@ try {
             $scene   = $gen['scene'];
             $outfit  = $gen['outfit'];
             $prompt  = video_prompt($gen['action'], $gen['line'], $gen['music']);
+            $extPrompt = ext_prompt($gen['continuation'] ?? '', $gen['line2'] ?? '', $gen['music']);
             $caption = $gen['caption'];
             $summary = $gen['summary'] . ' | kiyim: ' . $gen['outfit'] . ' | musiqa: ' . $gen['music'] . ' | "' . $gen['line'] . '"';
         } catch (Throwable $e) {
@@ -243,6 +261,7 @@ try {
             $scene   = $SCENES[$state['scene'] % count($SCENES)];
             $outfit  = '';
             $prompt  = $idea['prompt'];
+            $extPrompt = ext_prompt('', '', 'the same background music');
             $caption = $idea['caption'];
             $summary = 'tayyor g\'oya #' . ($state['idea'] % count($IDEAS) + 1);
             $state['idea']++;
@@ -268,7 +287,7 @@ try {
                 'model'        => 'grok-imagine-video',
                 'prompt'       => $prompt,
                 'image'        => ['url' => $imgUrl],
-                'duration'     => (int)$CFG['DURATION'],
+                'duration'     => extend_seconds() > 0 ? 15 : (int)$CFG['DURATION'],
                 'aspect_ratio' => '9:16',
                 'resolution'   => $CFG['RESOLUTION'],
             ]);
@@ -278,6 +297,8 @@ try {
             'request_id' => $res['request_id'],
             'caption'    => $caption,
             'summary'    => $summary,
+            'stage'      => 'base',
+            'ext_prompt' => $extPrompt,
             'photo'      => basename($photo),
             'prepared'   => $prepName,
             'created'    => date('c'),
@@ -298,6 +319,14 @@ try {
             ["Authorization: Bearer {$CFG['XAI_API_KEY']}"]);
         $status = $res['status'] ?? 'unknown';
 
+        if (in_array($status, ['failed', 'expired'], true) && ($p['stage'] ?? '') === 'ext' && !empty($p['base_video'])) {
+            logmsg("Uzaytirish bajarilmadi ($status), 15 soniyalik video joylanadi.");
+            $res = ['status' => 'done', 'video' => ['url' => "{$CFG['BASE_URL']}/videos/{$p['base_video']}"]];
+            $state['pending']['stage'] = 'final';
+            $p = $state['pending'];
+            unset($p['base_video']);
+            $status = 'done';
+        }
         if (in_array($status, ['failed', 'expired'], true)) {
             logmsg("Grok video yasay olmadi ($status): " . json_encode($res, JSON_UNESCAPED_UNICODE));
             notify("❌ Mustafo bot: Grok video yasay olmadi ($status).");
@@ -321,6 +350,30 @@ try {
         fclose($fp);
         if (!$ok || filesize("$DIR/videos/$vidName") < 10000) throw new RuntimeException('Video yuklab olinmadi.');
         $videoUrl = "{$CFG['BASE_URL']}/videos/$vidName";
+
+        // 1b) Uzaytirish: 15 s -> 25 s (bir marta)
+        if (extend_seconds() > 0 && ($p['stage'] ?? 'base') === 'base') {
+            try {
+                $ext = http_json('POST', 'https://api.x.ai/v1/videos/extensions',
+                    ["Authorization: Bearer {$CFG['XAI_API_KEY']}"],
+                    [
+                        'model'    => 'grok-imagine-video',
+                        'prompt'   => $p['ext_prompt'] ?? ext_prompt('', '', 'the same background music'),
+                        'duration' => extend_seconds(),
+                        'video'    => ['url' => $videoUrl],
+                    ]);
+                if (empty($ext['request_id'])) throw new RuntimeException('request_id kelmadi: ' . json_encode($ext));
+                $state['pending']['request_id'] = $ext['request_id'];
+                $state['pending']['stage'] = 'ext';
+                $state['pending']['base_video'] = $vidName;
+                save_state($state);
+                logmsg("1-qism tayyor, uzaytirilmoqda (+" . extend_seconds() . " s): {$ext['request_id']}");
+                exit;
+            } catch (Throwable $e) {
+                logmsg("Uzaytirib bo'lmadi, 15 soniyalik video joylanadi: " . $e->getMessage());
+            }
+        }
+        if (!empty($p['base_video'])) @unlink("$DIR/videos/{$p['base_video']}");
 
         // 2) Buffer orqali Instagram Reels
         $caption = $p['caption'] ?? ($IDEAS[$p['idea'] ?? 0]['caption']);
