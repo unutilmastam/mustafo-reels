@@ -123,7 +123,8 @@ function invent_idea(array $recent): array {
          . "The boy says ONE short, natural, everyday Uzbek (Latin script) sentence, max 10 words, simple words a child uses, correct grammar. "
          . "Prefer NOT to use his own name in the spoken line. Never anything unsafe, romantic, scary, or inappropriate for children. "
          . "Return ONLY valid JSON with keys: "
-         . "\"scene\" (English, detailed background/atmosphere/lighting/outfit description for an image), "
+         . "\"scene\" (English, detailed background/atmosphere/lighting description for an image), "
+         . "\"outfit\" (English, a NEW stylish age-appropriate outfit for him that fits the scene and season — different every time: colors, style, accessories like cap, glasses, scarf; modest and child-appropriate), "
          . "\"action\" (English, what he does + camera movement, for a video), "
          . "\"line\" (the Uzbek sentence he says), "
          . "\"caption\" (Uzbek Instagram caption, 1-3 short lines with emojis, then 4-6 relevant hashtags), "
@@ -142,7 +143,7 @@ function invent_idea(array $recent): array {
     $txt = $res['choices'][0]['message']['content'] ?? '';
     $txt = trim(preg_replace('/^```(?:json)?|```$/m', '', $txt));
     $j = json_decode($txt, true);
-    foreach (['scene', 'action', 'line', 'caption', 'summary'] as $k) {
+    foreach (['scene', 'outfit', 'action', 'line', 'caption', 'summary'] as $k) {
         if (empty($j[$k]) || !is_string($j[$k])) throw new RuntimeException("G'oya noto'g'ri formatda: " . substr($txt, 0, 300));
     }
     return $j;
@@ -151,18 +152,20 @@ function invent_idea(array $recent): array {
 /** Video uchun yakuniy ko'rsatma (talaffuz va sifat qoidalari bilan). */
 function video_prompt(string $action, string $line): string {
     return "Professional modern cinematic vertical video, smooth realistic motion, shallow depth of field, high detail. "
-         . "Keep the boy's face, hair and identity exactly as in the image. $action "
+         . "Keep the boy's face, hair, outfit and identity exactly as in the image. $action "
          . "He says in Uzbek, in a natural cheerful 6-year-old boy voice, slowly and clearly, pronouncing every sound and syllable correctly, "
          . "without skipping letters: \"$line\". Lip movements match the speech. "
          . "If the name Mustafo is said, pronounce it in three syllables: Mus-ta-fo.";
 }
 
 /** Grok bilan bolani yangi fonga/atmosferaga joylaydi (9:16). Natija faylini saqlaydi. */
-function make_scene(string $srcUrl, string $scene, string $dst): void {
+function make_scene(string $srcUrl, string $scene, string $dst, string $outfit = ''): void {
     global $CFG;
     $prompt = "Place this exact same little boy into a new scene: $scene. "
         . "Keep his face, facial features, hairstyle, skin tone and identity exactly the same; "
-        . "outfit may suit the scene but must look natural and age-appropriate. "
+        . ($outfit !== ''
+            ? "Dress him in a completely new outfit (replace his current clothes): $outfit. "
+            : "Dress him in a new stylish age-appropriate outfit that fits the scene (different from the photo). ")
         . "Vertical 9:16 full-frame composition, the boy in the center, visible from head to at least the knees, "
         . "modern professional cinematic photography, photorealistic, beautiful lighting, sharp focus, wholesome family-friendly mood. "
         . "The new background must fill the entire frame, no borders, no blank areas, no text.";
@@ -227,13 +230,15 @@ try {
         try {
             $gen = invent_idea(array_slice($state['recent'], -15));
             $scene   = $gen['scene'];
+            $outfit  = $gen['outfit'];
             $prompt  = video_prompt($gen['action'], $gen['line']);
             $caption = $gen['caption'];
-            $summary = $gen['summary'] . ' | "' . $gen['line'] . '"';
+            $summary = $gen['summary'] . ' | kiyim: ' . $gen['outfit'] . ' | "' . $gen['line'] . '"';
         } catch (Throwable $e) {
             logmsg("G'oya yaratilmadi, tayyor ro'yxatdan olinadi: " . $e->getMessage());
             $idea    = $IDEAS[$state['idea'] % count($IDEAS)];
             $scene   = $SCENES[$state['scene'] % count($SCENES)];
+            $outfit  = '';
             $prompt  = $idea['prompt'];
             $caption = $idea['caption'];
             $summary = 'tayyor g\'oya #' . ($state['idea'] % count($IDEAS) + 1);
@@ -248,7 +253,7 @@ try {
         // 2) Grok: bolani yangi fon/atmosferaga joylash
         $prepName = bin2hex(random_bytes(8)) . '.jpg';
         try {
-            make_scene("{$CFG['BASE_URL']}/prepared/$padName", $scene, "$DIR/prepared/$prepName");
+            make_scene("{$CFG['BASE_URL']}/prepared/$padName", $scene, "$DIR/prepared/$prepName", $outfit);
         } finally {
             @unlink("$DIR/prepared/$padName");
         }
