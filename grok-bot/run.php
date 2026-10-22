@@ -41,7 +41,7 @@ $STATE_FILE = "$DIR/state.json";
 $state = file_exists($STATE_FILE)
     ? (json_decode((string)file_get_contents($STATE_FILE), true) ?: [])
     : [];
-$state += ['idea' => 0, 'photo' => 0, 'scene' => 0, 'pending' => null, 'history' => []];
+$state += ['idea' => 0, 'photo' => 0, 'scene' => 0, 'recent' => [], 'pending' => null, 'history' => []];
 
 function save_state(array $s): void {
     global $STATE_FILE;
@@ -108,6 +108,55 @@ function prepare_image(string $src, string $dst): void {
     imagejpeg($out, $dst, 92);
 }
 
+/**
+ * Grok "kreativ rejissyor": har safar YANGI g'oya o'ylab topadi
+ * (fon, harakat, kamera, o'zbekcha gap, Instagram matni). Oldingilarini takrorlamaydi.
+ */
+function invent_idea(array $recent): array {
+    global $CFG;
+    $avoid = $recent ? "Do NOT repeat or closely resemble these recent videos:\n- " . implode("\n- ", $recent) : '';
+    $sys = "You are a creative director for a wholesome Instagram Reels page of a 6-year-old Uzbek boy named Mustafo. "
+         . "Every time, invent ONE fresh, trendy, fun, family-friendly 10-second video concept with a modern, professional, cinematic look. "
+         . "Vary everything: location/atmosphere (cities, nature, seasons, Uzbek culture, fantasy, sports, holidays, etc.), "
+         . "activity (dance trend, funny reaction, mini story, lifehack, compliment to parents, motivation, joke...), "
+         . "and camera work (slow dolly-in, orbit, tracking shot, low angle, close-up to wide, etc.). "
+         . "The boy says ONE short, natural, everyday Uzbek (Latin script) sentence, max 10 words, simple words a child uses, correct grammar. "
+         . "Prefer NOT to use his own name in the spoken line. Never anything unsafe, romantic, scary, or inappropriate for children. "
+         . "Return ONLY valid JSON with keys: "
+         . "\"scene\" (English, detailed background/atmosphere/lighting/outfit description for an image), "
+         . "\"action\" (English, what he does + camera movement, for a video), "
+         . "\"line\" (the Uzbek sentence he says), "
+         . "\"caption\" (Uzbek Instagram caption, 1-3 short lines with emojis, then 4-6 relevant hashtags), "
+         . "\"summary\" (5-8 English words describing the concept).";
+    $res = http_json('POST', 'https://api.x.ai/v1/chat/completions',
+        ["Authorization: Bearer {$CFG['XAI_API_KEY']}"],
+        [
+            'model'           => $CFG['TEXT_MODEL'] ?? 'grok-4.7',
+            'temperature'     => 1.0,
+            'response_format' => ['type' => 'json_object'],
+            'messages'        => [
+                ['role' => 'system', 'content' => $sys],
+                ['role' => 'user', 'content' => "Today is " . date('l, j F Y') . ". $avoid\nCreate the next video concept."],
+            ],
+        ]);
+    $txt = $res['choices'][0]['message']['content'] ?? '';
+    $txt = trim(preg_replace('/^```(?:json)?|```$/m', '', $txt));
+    $j = json_decode($txt, true);
+    foreach (['scene', 'action', 'line', 'caption', 'summary'] as $k) {
+        if (empty($j[$k]) || !is_string($j[$k])) throw new RuntimeException("G'oya noto'g'ri formatda: " . substr($txt, 0, 300));
+    }
+    return $j;
+}
+
+/** Video uchun yakuniy ko'rsatma (talaffuz va sifat qoidalari bilan). */
+function video_prompt(string $action, string $line): string {
+    return "Professional modern cinematic vertical video, smooth realistic motion, shallow depth of field, high detail. "
+         . "Keep the boy's face, hair and identity exactly as in the image. $action "
+         . "He says in Uzbek, in a natural cheerful 6-year-old boy voice, slowly and clearly, pronouncing every sound and syllable correctly, "
+         . "without skipping letters: \"$line\". Lip movements match the speech. "
+         . "If the name Mustafo is said, pronounce it in three syllables: Mus-ta-fo.";
+}
+
 /** Grok bilan bolani yangi fonga/atmosferaga joylaydi (9:16). Natija faylini saqlaydi. */
 function make_scene(string $srcUrl, string $scene, string $dst): void {
     global $CFG;
@@ -115,7 +164,7 @@ function make_scene(string $srcUrl, string $scene, string $dst): void {
         . "Keep his face, facial features, hairstyle, skin tone and identity exactly the same; "
         . "outfit may suit the scene but must look natural and age-appropriate. "
         . "Vertical 9:16 full-frame composition, the boy in the center, visible from head to at least the knees, "
-        . "photorealistic, natural cinematic lighting, sharp focus, wholesome family-friendly mood. "
+        . "modern professional cinematic photography, photorealistic, beautiful lighting, sharp focus, wholesome family-friendly mood. "
         . "The new background must fill the entire frame, no borders, no blank areas, no text.";
     $res = http_json('POST', 'https://api.x.ai/v1/images/edits',
         ["Authorization: Bearer {$CFG['XAI_API_KEY']}"],
@@ -155,8 +204,9 @@ function list_photos(): array {
 try {
     if ($mode === 'status') {
         echo "Rasmlar: " . count(list_photos()) . "\n";
-        echo "Keyingi g'oya: #" . ($state['idea'] % count($IDEAS) + 1) . " / " . count($IDEAS) . "\n";
-        echo "Keyingi fon: " . $SCENES[$state['scene'] % count($SCENES)] . "\n";
+        echo "Rejim: har safar yangi g'oya (AI)\n";
+        echo "Oxirgi g'oyalar:\n";
+        foreach (array_slice($state['recent'], -5) as $r) echo " * $r\n";
         echo "Kutilayotgan: " . json_encode($state['pending'], JSON_UNESCAPED_UNICODE) . "\n";
         echo "Oxirgi natijalar:\n";
         foreach (array_slice($state['history'], -5) as $h) echo " - " . json_encode($h, JSON_UNESCAPED_UNICODE) . "\n";
@@ -172,9 +222,24 @@ try {
         if (!$photos) throw new RuntimeException("photos/ papkasida rasm yo'q.");
 
         $photo = $photos[$state['photo'] % count($photos)];
-        $idea  = $IDEAS[$state['idea'] % count($IDEAS)];
 
-        $scene = $SCENES[$state['scene'] % count($SCENES)];
+        // 0) Har safar yangi g'oya (xato bo'lsa — tayyor ro'yxatdan)
+        try {
+            $gen = invent_idea(array_slice($state['recent'], -15));
+            $scene   = $gen['scene'];
+            $prompt  = video_prompt($gen['action'], $gen['line']);
+            $caption = $gen['caption'];
+            $summary = $gen['summary'] . ' | "' . $gen['line'] . '"';
+        } catch (Throwable $e) {
+            logmsg("G'oya yaratilmadi, tayyor ro'yxatdan olinadi: " . $e->getMessage());
+            $idea    = $IDEAS[$state['idea'] % count($IDEAS)];
+            $scene   = $SCENES[$state['scene'] % count($SCENES)];
+            $prompt  = $idea['prompt'];
+            $caption = $idea['caption'];
+            $summary = 'tayyor g\'oya #' . ($state['idea'] % count($IDEAS) + 1);
+            $state['idea']++;
+            $state['scene']++;
+        }
 
         // 1) Rasmni kesmasdan 9:16 kanvasga joylash
         $padName = bin2hex(random_bytes(8)) . '.jpg';   // taxmin qilib bo'lmaydigan nom
@@ -193,7 +258,7 @@ try {
             ["Authorization: Bearer {$CFG['XAI_API_KEY']}"],
             [
                 'model'        => 'grok-imagine-video',
-                'prompt'       => $idea['prompt'],
+                'prompt'       => $prompt,
                 'image'        => ['url' => $imgUrl],
                 'duration'     => (int)$CFG['DURATION'],
                 'aspect_ratio' => '9:16',
@@ -203,17 +268,17 @@ try {
 
         $state['pending'] = [
             'request_id' => $res['request_id'],
-            'idea'       => $state['idea'] % count($IDEAS),
+            'caption'    => $caption,
+            'summary'    => $summary,
             'photo'      => basename($photo),
             'prepared'   => $prepName,
-            'scene'      => $state['scene'] % count($SCENES),
             'created'    => date('c'),
         ];
-        $state['idea']++;
+        $state['recent'][] = $summary;
+        $state['recent'] = array_slice($state['recent'], -30);
         $state['photo']++;
-        $state['scene']++;
         save_state($state);
-        logmsg("Video buyurtma qilindi: {$res['request_id']} (g'oya #" . ($state['pending']['idea'] + 1) . ")");
+        logmsg("Video buyurtma qilindi: {$res['request_id']}\nG'oya: $summary");
         exit;
     }
 
@@ -250,7 +315,7 @@ try {
         $videoUrl = "{$CFG['BASE_URL']}/videos/$vidName";
 
         // 2) Buffer orqali Instagram Reels
-        $idea = $IDEAS[$p['idea']];
+        $caption = $p['caption'] ?? ($IDEAS[$p['idea'] ?? 0]['caption']);
         $query = 'mutation($input: CreatePostInput!) { createPost(input: $input) {
             __typename
             ... on PostActionSuccess { post { id status dueAt } }
@@ -260,7 +325,7 @@ try {
             'channelId'      => $CFG['CHANNEL_ID'],
             'schedulingType' => 'automatic',
             'mode'           => $CFG['POST_NOW'] ? 'shareNow' : 'addToQueue',
-            'text'           => $idea['caption'],
+            'text'           => $caption,
             'assets'         => [['video' => ['url' => $videoUrl]]],
             'metadata'       => ['instagram' => [
                 'type'              => 'reel',
