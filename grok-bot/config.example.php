@@ -23,6 +23,13 @@ return [
     'RESOLUTION'     => '720p',   // '720p' yoki '480p'
     'EXTEND_SECONDS' => 0,        // uzaytirish: 10 = jami 25 s, 0 = o'chiq (15 s gacha)
 
+    // ===== KLING (Kie.ai orqali) =====
+    // Kalit: https://kie.ai -> API Key. Bo'sh qoldirsangiz faqat Grok ishlaydi.
+    'KIE_API_KEY'    => '',
+    'KLING_MODE'     => 'pro',     // 'pro' yoki 'std'
+    // Qaysi kuni qaysi dvigatel (1=Dush ... 7=Yaksh)
+    'ENGINE_DAYS'    => [2 => 'grok', 4 => 'kling', 6 => 'grok'],
+
     // true = darhol joylaydi, false = Buffer navbatiga qo'shadi
     'POST_NOW'       => true,
 

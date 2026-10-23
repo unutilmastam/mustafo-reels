@@ -156,6 +156,9 @@ function invent_idea(array $recent): array {
          . "\"line2\" (a second short Uzbek sentence he says in that second part, max 8 words), "
          . "\"music\" (English, background music style that matches the mood and place, e.g. 'gentle acoustic guitar, warm autumn mood' or 'upbeat modern kids pop beat'; instrumental only, no lyrics), "
          . "\"caption\" (Uzbek Instagram caption: line 1 = a short emotional hook; line 2 = a simple QUESTION to parents that invites comments (e.g. 'Sizning farzandingiz ham shunday qiladimi? 👇'); line 3 = a soft call to follow and share (e.g. 'Yoqsa, do'stlaringizga ulashing 💛'); then 4-6 relevant Uzbek/English hashtags, no location or school names), "
+         . "\"shots\" (array of exactly 3 objects {\"prompt\": English, max 400 chars, \"duration\": 5} - a mini 3-shot story of the same concept, "
+         . "same place and outfit, each shot a different camera angle; shot 1 opens with strong motion; ONLY shot 3 contains speech: "
+         . "he says the Uzbek line in quotes, in a natural cute little boy voice, slowly and clearly; every shot mentions the same background music), "
          . "\"summary\" (5-8 English words describing the concept).";
     $res = http_json('POST', 'https://api.x.ai/v1/chat/completions',
         ["Authorization: Bearer {$CFG['XAI_API_KEY']}"],
@@ -207,6 +210,62 @@ function fix_caption(string $caption): string {
     if (!isset($seen['reels'])) $text = rtrim($text) . ' #reels';
     if (!isset($seen['bolalar'])) $text = rtrim($text) . ' #bolalar';
     return trim(preg_replace('/[ \t]{2,}/', ' ', $text));
+}
+
+/** Bugun qaysi dvigatel: 'grok' yoki 'kling'. ENGINE_DAYS => [hafta_kuni => dvigatel], 1=Dush..7=Yaksh */
+function pick_engine(): string {
+    global $CFG;
+    if (empty($CFG['KIE_API_KEY'])) return 'grok';
+    $map = $CFG['ENGINE_DAYS'] ?? [2 => 'grok', 4 => 'kling', 6 => 'grok'];
+    $e = $map[(int)date('N')] ?? ($CFG['ENGINE_DEFAULT'] ?? 'grok');
+    return in_array($e, ['grok', 'kling'], true) ? $e : 'grok';
+}
+
+/** Kling 3.0 (Kie.ai orqali): 3 kadrli, ovoz va musiqali video buyurtma qiladi. taskId qaytaradi. */
+function kling_create(string $imgUrl, array $shots, string $fallbackPrompt): string {
+    global $CFG;
+    $multi = [];
+    foreach (array_slice($shots, 0, 5) as $sh) {
+        if (!is_array($sh) || empty($sh['prompt'])) continue;
+        $multi[] = ['prompt' => mb_substr((string)$sh['prompt'], 0, 490), 'duration' => max(1, min(12, (int)($sh['duration'] ?? 5)))];
+    }
+    $input = [
+        'image_urls' => [$imgUrl],
+        'sound'      => true,
+        'mode'       => $CFG['KLING_MODE'] ?? 'pro',
+    ];
+    if (count($multi) >= 2) {
+        $input['multi_shots']  = true;
+        $input['multi_prompt'] = $multi;
+        $input['duration']     = (string)array_sum(array_column($multi, 'duration'));
+        $input['prompt']       = '';
+    } else {
+        $input['multi_shots'] = false;
+        $input['prompt']      = mb_substr($fallbackPrompt, 0, 2400);
+        $input['duration']    = (string)($CFG['KLING_DURATION'] ?? 15);
+    }
+    $res = http_json('POST', 'https://api.kie.ai/api/v1/jobs/createTask',
+        ["Authorization: Bearer {$CFG['KIE_API_KEY']}"],
+        ['model' => 'kling-3.0/video', 'input' => $input]);
+    $id = $res['data']['taskId'] ?? '';
+    if ($id === '') throw new RuntimeException('Kling taskId bermadi: ' . substr(json_encode($res, JSON_UNESCAPED_UNICODE), 0, 400));
+    return $id;
+}
+
+/** Kling vazifasi holatini Grok formatiga o'giradi. */
+function kling_status(string $taskId): array {
+    global $CFG;
+    $res = http_json('GET', 'https://api.kie.ai/api/v1/jobs/recordInfo?taskId=' . urlencode($taskId),
+        ["Authorization: Bearer {$CFG['KIE_API_KEY']}"]);
+    $d = $res['data'] ?? [];
+    $st = $d['state'] ?? 'unknown';
+    if ($st === 'success') {
+        $rj = is_string($d['resultJson'] ?? null) ? json_decode($d['resultJson'], true) : ($d['resultJson'] ?? []);
+        $url = $rj['resultUrls'][0] ?? '';
+        return ['status' => $url ? 'done' : 'failed', 'video' => ['url' => $url], 'raw' => $d];
+    }
+    if ($st === 'fail') return ['status' => 'failed', 'raw' => $d];
+    return ['status' => 'processing', 'progress' => $st];
 }
 
 /** Video uchun yakuniy ko'rsatma (talaffuz va sifat qoidalari bilan). */
@@ -277,11 +336,16 @@ function list_photos(): array {
 
 // ================= REJIMLAR =================
 
+$forceEngine = null;
+$fe = $isCli ? ($argv[2] ?? '') : ($_GET['engine'] ?? '');
+if (in_array($fe, ['grok', 'kling'], true)) $forceEngine = $fe;
+
 try {
     // Kechiktirilgan buyurtma: ?mode=later&min=60 -> 60 daqiqadan keyin cron (check) o'zi 'new' qiladi
     if ($mode === 'later') {
         $min = max(1, min(1440, (int)($isCli ? ($argv[2] ?? 60) : ($_GET['min'] ?? 60))));
         $state['run_at'] = time() + $min * 60;
+        $state['run_engine'] = $forceEngine;
         save_state($state);
         logmsg("Yangi video $min daqiqadan keyin yasaladi: " . date('H:i', $state['run_at']) . " (Toshkent vaqti)");
         exit;
@@ -302,6 +366,8 @@ try {
     }
     if ($mode === 'check' && empty($state['pending']) && !empty($state['run_at']) && time() >= $state['run_at']) {
         unset($state['run_at']);
+        $forceEngine = $state['run_engine'] ?? $forceEngine;
+        unset($state['run_engine']);
         $state['last_auto'] = date('Y-m-d');   // bugungi post shu bo'ladi, ikkinchisi chiqmaydi
         save_state($state);
         $mode = 'new';
@@ -310,6 +376,7 @@ try {
     if ($mode === 'status') {
         echo "Rasmlar: " . count(list_photos()) . "\n";
         echo "Rejim: har safar yangi g'oya (AI)\n";
+        echo "Bugungi dvigatel: " . strtoupper(pick_engine()) . (empty($CFG['KIE_API_KEY']) ? " (Kling kaliti yo'q)" : "") . "\n";
         echo "Oxirgi g'oyalar:\n";
         foreach (array_slice($state['recent'], -5) as $r) echo " * $r\n";
         $dn = ['', 'Dush', 'Sesh', 'Chor', 'Pay', 'Jum', 'Shan', 'Yaksh'];
@@ -339,6 +406,7 @@ try {
             $prompt  = video_prompt($gen['action'], $gen['line'], $gen['music']);
             $extPrompt = ext_prompt($gen['continuation'] ?? '', $gen['line2'] ?? '', $gen['music']);
             $caption = fix_caption($gen['caption']);
+            $shots   = is_array($gen['shots'] ?? null) ? $gen['shots'] : [];
             $summary = $gen['summary'] . ' | kiyim: ' . $gen['outfit'] . ' | musiqa: ' . $gen['music'] . ' | "' . $gen['line'] . '"';
         } catch (Throwable $e) {
             logmsg("G'oya yaratilmadi, tayyor ro'yxatdan olinadi: " . $e->getMessage());
@@ -348,6 +416,7 @@ try {
             $prompt  = $idea['prompt'];
             $extPrompt = ext_prompt('', '', 'the same background music');
             $caption = $idea['caption'];
+            $shots   = [];
             $summary = 'tayyor g\'oya #' . ($state['idea'] % count($IDEAS) + 1);
             $state['idea']++;
             $state['scene']++;
@@ -366,20 +435,32 @@ try {
         }
         $imgUrl = "{$CFG['BASE_URL']}/prepared/$prepName";
 
-        $res = http_json('POST', 'https://api.x.ai/v1/videos/generations',
-            ["Authorization: Bearer {$CFG['XAI_API_KEY']}"],
-            [
-                'model'        => 'grok-imagine-video',
-                'prompt'       => $prompt,
-                'image'        => ['url' => $imgUrl],
-                'duration'     => (int)$CFG['DURATION'],
-                'aspect_ratio' => '9:16',
-                'resolution'   => $CFG['RESOLUTION'],
-            ]);
+        $engine = $forceEngine ?? pick_engine();
+        if ($engine === 'kling') {
+            try {
+                $res = ['request_id' => kling_create($imgUrl, $shots, $prompt)];
+            } catch (Throwable $e) {
+                logmsg("Kling ishlamadi, Grok bilan davom etiladi: " . $e->getMessage());
+                $engine = 'grok';
+            }
+        }
+        if ($engine === 'grok') {
+            $res = http_json('POST', 'https://api.x.ai/v1/videos/generations',
+                ["Authorization: Bearer {$CFG['XAI_API_KEY']}"],
+                [
+                    'model'        => 'grok-imagine-video',
+                    'prompt'       => $prompt,
+                    'image'        => ['url' => $imgUrl],
+                    'duration'     => (int)$CFG['DURATION'],
+                    'aspect_ratio' => '9:16',
+                    'resolution'   => $CFG['RESOLUTION'],
+                ]);
+        }
         if (empty($res['request_id'])) throw new RuntimeException('request_id kelmadi: ' . json_encode($res));
 
         $state['pending'] = [
             'request_id' => $res['request_id'],
+            'engine'     => $engine,
             'caption'    => $caption,
             'summary'    => $summary,
             'stage'      => 'base',
@@ -392,7 +473,7 @@ try {
         $state['recent'] = array_slice($state['recent'], -30);
         $state['photo']++;
         save_state($state);
-        logmsg("Video buyurtma qilindi: {$res['request_id']}\nG'oya: $summary");
+        logmsg("Video buyurtma qilindi [" . strtoupper($engine) . "]: {$res['request_id']}\nG'oya: $summary");
         exit;
     }
 
@@ -400,8 +481,12 @@ try {
         $p = $state['pending'];
         if (!$p) { echo "Kutilayotgan video yo'q.\n"; exit; }
 
-        $res = http_json('GET', "https://api.x.ai/v1/videos/{$p['request_id']}",
-            ["Authorization: Bearer {$CFG['XAI_API_KEY']}"]);
+        if (($p['engine'] ?? 'grok') === 'kling') {
+            $res = kling_status($p['request_id']);
+        } else {
+            $res = http_json('GET', "https://api.x.ai/v1/videos/{$p['request_id']}",
+                ["Authorization: Bearer {$CFG['XAI_API_KEY']}"]);
+        }
         $status = $res['status'] ?? 'unknown';
 
         if (in_array($status, ['failed', 'expired'], true) && ($p['stage'] ?? '') === 'ext' && !empty($p['base_video'])) {
@@ -437,7 +522,7 @@ try {
         $videoUrl = "{$CFG['BASE_URL']}/videos/$vidName";
 
         // 1b) Uzaytirish: 15 s -> 25 s (bir marta)
-        if (extend_seconds() > 0 && ($p['stage'] ?? 'base') === 'base') {
+        if (extend_seconds() > 0 && ($p['engine'] ?? 'grok') === 'grok' && ($p['stage'] ?? 'base') === 'base') {
             try {
                 $ext = http_json('POST', 'https://api.x.ai/v1/videos/extensions',
                     ["Authorization: Bearer {$CFG['XAI_API_KEY']}"],
