@@ -478,7 +478,6 @@ try {
             'metadata'       => ['instagram' => [
                 'type'              => 'reel',
                 'shouldShareToFeed' => true,
-                'firstComment'      => "Sizga qaysi lahza ko'proq yoqdi? 👇 Izohda yozing, Mustafo o'qiydi 😊",
                 'isAiGenerated'     => true,
             ]],
         ];
