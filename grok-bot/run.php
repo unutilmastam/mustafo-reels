@@ -227,7 +227,8 @@ function to_data_uri(string $url): string {
     $rel = substr($url, strlen($CFG['BASE_URL']) + 1);
     $path = "$DIR/$rel";
     if (!str_starts_with($url, $CFG['BASE_URL'] . '/') || !is_file($path)) return $url;
-    return 'data:image/jpeg;base64,' . base64_encode((string)file_get_contents($path));
+    $mime = str_ends_with(strtolower($path), '.mp4') ? 'video/mp4' : 'image/jpeg';
+    return "data:$mime;base64," . base64_encode((string)file_get_contents($path));
 }
 
 /** Grok bilan bolani yangi fonga/atmosferaga joylaydi (9:16). Natija faylini saqlaydi. */
@@ -444,7 +445,7 @@ try {
                         'model'    => 'grok-imagine-video',
                         'prompt'   => $p['ext_prompt'] ?? ext_prompt('', '', 'the same background music'),
                         'duration' => extend_seconds(),
-                        'video'    => ['url' => $videoUrl],
+                        'video'    => ['url' => to_data_uri($videoUrl)],
                     ]);
                 if (empty($ext['request_id'])) throw new RuntimeException('request_id kelmadi: ' . json_encode($ext));
                 $state['pending']['request_id'] = $ext['request_id'];
