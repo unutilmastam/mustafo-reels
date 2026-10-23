@@ -152,7 +152,7 @@ function invent_idea(array $recent): array {
          . "\"continuation\" (English, what happens next in a second part of the same video: a new action and a different camera angle, same place, same outfit), "
          . "\"line2\" (a second short Uzbek sentence he says in that second part, max 8 words), "
          . "\"music\" (English, background music style that matches the mood and place, e.g. 'gentle acoustic guitar, warm autumn mood' or 'upbeat modern kids pop beat'; instrumental only, no lyrics), "
-         . "\"caption\" (Uzbek Instagram caption, 1-3 short lines with emojis, then 4-6 relevant hashtags), "
+         . "\"caption\" (Uzbek Instagram caption: line 1 = a short emotional hook; line 2 = a simple QUESTION to parents that invites comments (e.g. 'Sizning farzandingiz ham shunday qiladimi? 👇'); line 3 = a soft call to follow and share (e.g. 'Yoqsa, do'stlaringizga ulashing 💛'); then 4-6 relevant Uzbek/English hashtags, no location or school names), "
          . "\"summary\" (5-8 English words describing the concept).";
     $res = http_json('POST', 'https://api.x.ai/v1/chat/completions',
         ["Authorization: Bearer {$CFG['XAI_API_KEY']}"],
