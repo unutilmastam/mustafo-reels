@@ -134,6 +134,9 @@ function invent_idea(array $recent): array {
          . "Vary everything: location/atmosphere (cities, nature, seasons, Uzbek culture, fantasy, sports, holidays, etc.), "
          . "activity (dance trend, funny reaction, mini story, lifehack, compliment to parents, motivation, joke...), "
          . "and camera work (slow dolly-in, orbit, tracking shot, low angle, close-up to wide, etc.). "
+         . "AUDIENCE (real Instagram stats): 72% women, mostly mothers aged 25-34; 65% Uzbekistan, 21% Iran, also Russia, Kyrgyzstan, Tajikistan; "
+         . "99% of viewers are new people from the Reels feed. So make moments young mothers find heartwarming and want to save and share; "
+         . "the story must be understandable WITHOUT words (visual storytelling), the spoken line is a bonus. "
          . "WHAT WORKS on this page (learned from real results): the best video (28x more views) was the boy in a golden autumn park "
          . "throwing falling leaves with arms wide open — strong motion and particles from the very first frame, seasonal, warm and emotional. "
          . "The weakest video started with the boy just standing still and looking at the camera. So ALWAYS: "
@@ -458,6 +461,8 @@ try {
 
         // 2) Buffer orqali Instagram Reels
         $caption = $p['caption'] ?? ($IDEAS[$p['idea'] ?? 0]['caption']);
+        $epNo = ($state['series'] ?? 0) + 1;
+        $caption = "Mustafo sarguzashtlari • №$epNo 🎬\n" . $caption . "\n\nYangi qismlarni o'tkazib yubormang — obuna bo'ling 💛";
         $query = 'mutation($input: CreatePostInput!) { createPost(input: $input) {
             __typename
             ... on PostActionSuccess { post { id status dueAt } }
@@ -472,6 +477,7 @@ try {
             'metadata'       => ['instagram' => [
                 'type'              => 'reel',
                 'shouldShareToFeed' => true,
+                'firstComment'      => "Sizga qaysi lahza ko'proq yoqdi? 👇 Izohda yozing, Mustafo o'qiydi 😊",
                 'isAiGenerated'     => true,
             ]],
         ];
@@ -489,6 +495,7 @@ try {
 
         $state['history'][] = ['t' => date('c'), 'ok' => true, 'video' => $vidName, 'post' => $cp['post']['id']];
         $state['pending'] = null;
+        $state['series'] = $epNo;
         save_state($state);
         logmsg("✅ Joylandi: $videoUrl (Buffer post {$cp['post']['id']})");
         notify("✅ Mustafo bot: yangi Reels joylandi!\n$videoUrl");
