@@ -180,7 +180,7 @@ function invent_idea(array $recent): array {
 /** Uzaytirish soniyalari (0 = o'chiq). Standart: 0 (o'chiq); 10 → jami 25 soniya. */
 function extend_seconds(): int {
     global $CFG;
-    return max(0, min(10, (int)($CFG['EXTEND_SECONDS'] ?? 0)));
+    return max(0, min(10, (int)($CFG['EXTEND_SECONDS'] ?? 0)));  // 2-10 s; 0 = o'chiq
 }
 
 /** Videoning 2-qismi uchun ko'rsatma. */
@@ -372,7 +372,7 @@ try {
                 'model'        => 'grok-imagine-video',
                 'prompt'       => $prompt,
                 'image'        => ['url' => $imgUrl],
-                'duration'     => extend_seconds() > 0 ? 15 : (int)$CFG['DURATION'],
+                'duration'     => (int)$CFG['DURATION'],
                 'aspect_ratio' => '9:16',
                 'resolution'   => $CFG['RESOLUTION'],
             ]);
@@ -405,7 +405,7 @@ try {
         $status = $res['status'] ?? 'unknown';
 
         if (in_array($status, ['failed', 'expired'], true) && ($p['stage'] ?? '') === 'ext' && !empty($p['base_video'])) {
-            logmsg("Uzaytirish bajarilmadi ($status), 15 soniyalik video joylanadi.");
+            logmsg("Uzaytirish bajarilmadi ($status), 1-qism joylanadi.");
             $res = ['status' => 'done', 'video' => ['url' => "{$CFG['BASE_URL']}/videos/{$p['base_video']}"]];
             $state['pending']['stage'] = 'final';
             $p = $state['pending'];
@@ -455,7 +455,7 @@ try {
                 logmsg("1-qism tayyor, uzaytirilmoqda (+" . extend_seconds() . " s): {$ext['request_id']}");
                 exit;
             } catch (Throwable $e) {
-                logmsg("Uzaytirib bo'lmadi, 15 soniyalik video joylanadi: " . $e->getMessage());
+                logmsg("Uzaytirib bo'lmadi, 1-qism joylanadi: " . $e->getMessage());
             }
         }
         if (!empty($p['base_video'])) @unlink("$DIR/videos/{$p['base_video']}");
