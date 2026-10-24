@@ -548,7 +548,8 @@ try {
         // 2) Buffer orqali Instagram Reels
         $caption = $p['caption'] ?? ($IDEAS[$p['idea'] ?? 0]['caption']);
         $epNo = ($state['series'] ?? 0) + 1;
-        $caption = "Mustafo sarguzashtlari • №$epNo 🎬\n" . $caption . "\n\nYangi qismlarni o'tkazib yubormang — obuna bo'ling 💛";
+        $caption = "Mustafo sarguzashtlari • №$epNo 🎬\n" . $caption
+            . (stripos($caption, 'obuna') === false ? "\n\nYangi qismlarni o'tkazib yubormang — obuna bo'ling 💛" : '');
         $query = 'mutation($input: CreatePostInput!) { createPost(input: $input) {
             __typename
             ... on PostActionSuccess { post { id status dueAt } }
